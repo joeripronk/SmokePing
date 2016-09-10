@@ -10,7 +10,7 @@ use SNMP_util;
 use SNMP_Session;
 # enable locale??
 #use locale;
-use POSIX qw(fmod locale_h signal_h sys_wait_h);
+use POSIX qw(fmod locale_h signal_h sys_wait_h floor);
 use Smokeping::Config;
 use RRDs;
 use Sys::Syslog qw(:DEFAULT setlogsock);
@@ -4404,23 +4404,43 @@ KID:
 
     my $now = Time::HiRes::time();
     my $longprobe = 0;
+    my $nexttime=floor($now/$step)*$step+$offset+$step;
     while (1) {
         unless ($opt{nosleep} or $opt{debug}) {
-                my $sleeptime = $step - fmod($now-$offset, $step);
-                my $logmsg = "Sleeping $sleeptime seconds.";
-                if ($longprobe && $step-$sleeptime < 0.3) {
+            $now = Time::HiRes::time();
+            my $logmsg="";
+            my $sleeptime=0;
+            if ($now<$nexttime) {
+                $sleeptime = $nexttime-$seconds;
+                if (defined $myprobe) {
+                    $probes->{$myprobe}->do_debug("Sleeping $sleeptime seconds.");
+                } else {
+                    do_debuglog("Sleeping $sleeptime seconds.");
+                }
+                $logmsg = "Sleeping $sleeptime microseconds.";
+                if ($longprobe && $step-($sleeptime/1000000) < 0.3) {
                     $logmsg = "NOT sleeping $sleeptime seconds, running probes immediately.";
                     $sleeptime = 0;
                 }
-                if (defined $myprobe) {
-                        $probes->{$myprobe}->do_debug($logmsg);
+            } else {
+                $sleeptime=0;
+                if ($now>$nexttime+$step) {
+                    $logmsg = "Running behind on poll for more than $step: ".$nexttime-$now." doing a resync.";
+                    $nexttime=floor($now/$step)*$step+$offset+$step;
                 } else {
-                        do_debuglog($logmsg);
+                    $logmsg = "Running behind on poll for ".$nexttime-$now." seconds.";
                 }
-                if ($sleeptime > 0) {
-                    Time::HiRes::sleep($sleeptime);
-                }
-                last if checkhup($multiprocessmode, $gothup) && reload_cfg($cfgfile);
+            }
+            if (defined $myprobe) {
+                $probes->{$myprobe}->do_debug($logmsg);
+            } else {
+                do_debuglog($logmsg);
+            }
+            if ($sleeptime > 0) {
+                Time::HiRes::sleep($sleeptime);
+            }
+            last if checkhup($multiprocessmode, $gothup) && reload_cfg($cfgfile);
+            $nexttime+=$step;
         }
         my $startts = Time::HiRes::time();
         run_probes $probes, $myprobe; # $myprobe is undef if running without 'concurrentprobes'
